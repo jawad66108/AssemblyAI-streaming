@@ -1,207 +1,254 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8" />
-<title>Viva — Day 1: Streaming STT test</title>
-<style>
-  body {
-    font-family: -apple-system, system-ui, sans-serif;
-    max-width: 640px;
-    margin: 40px auto;
-    padding: 0 20px;
-    color: #1a1a1a;
-  }
-  h1 { font-size: 1.3rem; }
-  #status {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 0.8rem;
-    background: #eee;
-    margin-left: 8px;
-  }
-  #status.connected { background: #d4f7d4; }
-  #status.error { background: #fbd4d4; }
-  button {
-    font-size: 1rem;
-    padding: 10px 20px;
-    margin: 16px 8px 16px 0;
-    border-radius: 8px;
-    border: 1px solid #ccc;
-    cursor: pointer;
-  }
-  #startBtn { background: #1a1a1a; color: white; border: none; }
-  #startBtn:disabled, #stopBtn:disabled { opacity: 0.4; cursor: default; }
-  #partial {
-    color: #999;
-    font-style: italic;
-    min-height: 1.4em;
-    margin-top: 8px;
-  }
-  #finalLog p { margin: 6px 0; padding: 8px 12px; background: #f4f4f4; border-radius: 8px; }
-  #log { font-size: 0.75rem; color: #999; margin-top: 24px; white-space: pre-wrap; }
-</style>
-</head>
-<body>
-
-<h1>Viva — Day 1 test<span id="status">idle</span></h1>
-<p>Click Start, allow the mic, and talk. This only proves the streaming
-pipeline works end to end (mic → token → AssemblyAI → live transcript).
-No agent logic yet — that's Day 3+.</p>
-
-<button id="startBtn">Start</button>
-<button id="stopBtn" disabled>Stop</button>
-
-<div id="partial"></div>
-<div id="finalLog"></div>
-<div id="log"></div>
-
-<script>
-const statusEl = document.getElementById("status");
-const partialEl = document.getElementById("partial");
-const finalLogEl = document.getElementById("finalLog");
-const logEl = document.getElementById("log");
-const startBtn = document.getElementById("startBtn");
-const stopBtn = document.getElementById("stopBtn");
-
-let ws = null;
-let audioContext = null;
-let scriptNode = null;
-let micStream = null;
-
-function log(msg) {
-  logEl.textContent += msg + "\n";
-}
-
-function setStatus(text, cls) {
-  statusEl.textContent = text;
-  statusEl.className = cls || "";
-}
-
-// AssemblyAI's streaming API wants 16kHz, single-channel, 16-bit PCM.
-// Browsers rarely capture at exactly 16kHz, so we downsample manually.
-function downsampleTo16k(float32Buffer, inputSampleRate) {
-  const targetRate = 16000;
-  if (inputSampleRate === targetRate) return float32Buffer;
-  const ratio = inputSampleRate / targetRate;
-  const newLength = Math.round(float32Buffer.length / ratio);
-  const result = new Float32Array(newLength);
-  let offsetResult = 0;
-  let offsetBuffer = 0;
-  while (offsetResult < newLength) {
-    const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-    let accum = 0, count = 0;
-    for (let i = offsetBuffer; i < nextOffsetBuffer && i < float32Buffer.length; i++) {
-      accum += float32Buffer[i];
-      count++;
-    }
-    result[offsetResult] = count ? accum / count : 0;
-    offsetResult++;
-    offsetBuffer = nextOffsetBuffer;
-  }
-  return result;
-}
-
-function floatTo16BitPCM(float32Array) {
-  const buffer = new ArrayBuffer(float32Array.length * 2);
-  const view = new DataView(buffer);
-  for (let i = 0, offset = 0; i < float32Array.length; i++, offset += 2) {
-    const s = Math.max(-1, Math.min(1, float32Array[i]));
-    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true); // little-endian
-  }
-  return buffer;
-}
-
-async function start() {
-  startBtn.disabled = true;
-  setStatus("connecting…");
-
-  // 1. Get a short-lived token from our own server — the real API key
-  //    never touches the browser.
-  const tokenRes = await fetch("/api/token");
-  const tokenData = await tokenRes.json();
-  if (!tokenRes.ok) {
-    setStatus("error", "error");
-    log("Token error: " + JSON.stringify(tokenData));
-    startBtn.disabled = false;
-    return;
-  }
-
-  // 2. Open the AssemblyAI streaming WebSocket with that token.
-  const params = new URLSearchParams({
-    sample_rate: "16000",
-    speech_model: "universal-streaming-english", // swap to "universal-3-5-pro" for higher accuracy
-    format_turns: "true",
-    token: tokenData.token,
-  });
-  ws = new WebSocket(`wss://streaming.assemblyai.com/v3/ws?${params}`);
-
-  ws.onopen = async () => {
-    setStatus("connected", "connected");
-    stopBtn.disabled = false;
-
-    // 3. Grab the mic and start streaming PCM16 audio frames.
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const source = audioContext.createMediaStreamSource(micStream);
-
-    // ScriptProcessorNode is deprecated but simplest for a Day-1 test —
-    // swap for an AudioWorkletNode later if you want to clean this up.
-    scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
-    source.connect(scriptNode);
-    scriptNode.connect(audioContext.destination);
-
-    scriptNode.onaudioprocess = (e) => {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      const input = e.inputBuffer.getChannelData(0);
-      const downsampled = downsampleTo16k(input, audioContext.sampleRate);
-      const pcm16 = floatTo16BitPCM(downsampled);
-      ws.send(pcm16);
-    };
-  };
-
-  ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    if (data.type === "Begin") {
-      log("Session started: " + data.id);
-    } else if (data.type === "Turn") {
-      if (data.end_of_turn) {
-        const p = document.createElement("p");
-        p.textContent = data.transcript;
-        finalLogEl.appendChild(p);
-        partialEl.textContent = "";
-      } else {
-        partialEl.textContent = data.transcript;
+  <head>
+    <meta charset="UTF-8" />
+    <title>Viva — Day 1: Streaming STT test</title>
+    <style>
+      body {
+        font-family: -apple-system, system-ui, sans-serif;
+        max-width: 640px;
+        margin: 40px auto;
+        padding: 0 20px;
+        color: #1a1a1a;
       }
-    } else if (data.type === "Termination") {
-      log("Session ended. Audio processed: " + data.audio_duration_seconds + "s");
-    } else if (data.error) {
-      log("Error: " + JSON.stringify(data));
-    }
-  };
+      h1 {
+        font-size: 1.3rem;
+      }
+      #status {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        background: #eee;
+        margin-left: 8px;
+      }
+      #status.connected {
+        background: #d4f7d4;
+      }
+      #status.error {
+        background: #fbd4d4;
+      }
+      button {
+        font-size: 1rem;
+        padding: 10px 20px;
+        margin: 16px 8px 16px 0;
+        border-radius: 8px;
+        border: 1px solid #ccc;
+        cursor: pointer;
+      }
+      #startBtn {
+        background: #1a1a1a;
+        color: white;
+        border: none;
+      }
+      #startBtn:disabled,
+      #stopBtn:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      #partial {
+        color: #999;
+        font-style: italic;
+        min-height: 1.4em;
+        margin-top: 8px;
+      }
+      #finalLog p {
+        margin: 6px 0;
+        padding: 8px 12px;
+        background: #f4f4f4;
+        border-radius: 8px;
+      }
+      #log {
+        font-size: 0.75rem;
+        color: #999;
+        margin-top: 24px;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Viva — Day 1 test<span id="status">idle</span></h1>
+    <p>
+      Click Start, allow the mic, and talk. This only proves the streaming
+      pipeline works end to end (mic → token → AssemblyAI → live transcript). No
+      agent logic yet — that's Day 3+.
+    </p>
 
-  ws.onerror = (e) => {
-    setStatus("error", "error");
-    log("WebSocket error");
-  };
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" disabled>Stop</button>
 
-  ws.onclose = () => {
-    setStatus("idle");
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-  };
-}
+    <div id="partial"></div>
+    <div id="finalLog"></div>
+    <div id="log"></div>
 
-function stop() {
-  if (scriptNode) scriptNode.disconnect();
-  if (audioContext) audioContext.close();
-  if (micStream) micStream.getTracks().forEach((t) => t.stop());
-  if (ws) ws.close();
-  stopBtn.disabled = true;
-}
+    <script>
+      const statusEl = document.getElementById("status");
+      const partialEl = document.getElementById("partial");
+      const finalLogEl = document.getElementById("finalLog");
+      const logEl = document.getElementById("log");
+      const startBtn = document.getElementById("startBtn");
+      const stopBtn = document.getElementById("stopBtn");
 
-startBtn.addEventListener("click", start);
-stopBtn.addEventListener("click", stop);
-</script>
-</body>
+      let ws = null;
+      let audioContext = null;
+      let scriptNode = null;
+      let micStream = null;
+
+      function log(msg) {
+        logEl.textContent += msg + "\n";
+      }
+
+      function setStatus(text, cls) {
+        statusEl.textContent = text;
+        statusEl.className = cls || "";
+      }
+
+      function downsampleTo16k(float32Buffer, inputSampleRate) {
+        const targetRate = 16000;
+        if (inputSampleRate === targetRate) return float32Buffer;
+        const ratio = inputSampleRate / targetRate;
+        const newLength = Math.round(float32Buffer.length / ratio);
+        const result = new Float32Array(newLength);
+        let offsetResult = 0;
+        let offsetBuffer = 0;
+        while (offsetResult < newLength) {
+          const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+          let accum = 0,
+            count = 0;
+          for (
+            let i = offsetBuffer;
+            i < nextOffsetBuffer && i < float32Buffer.length;
+            i++
+          ) {
+            accum += float32Buffer[i];
+            count++;
+          }
+          result[offsetResult] = count ? accum / count : 0;
+          offsetResult++;
+          offsetBuffer = nextOffsetBuffer;
+        }
+        return result;
+      }
+
+      function floatTo16BitPCM(float32Array) {
+        const buffer = new ArrayBuffer(float32Array.length * 2);
+        const view = new DataView(buffer);
+        for (let i = 0, offset = 0; i < float32Array.length; i++, offset += 2) {
+          const s = Math.max(-1, Math.min(1, float32Array[i]));
+          view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+        }
+        return buffer;
+      }
+
+      async function start() {
+        startBtn.disabled = true;
+        setStatus("connecting…");
+
+        try {
+          const tokenRes = await fetch("/api/token");
+          const raw = await tokenRes.text();
+
+          let tokenData;
+          try {
+            tokenData = JSON.parse(raw);
+          } catch {
+            throw new Error(
+              "Token endpoint didn't return JSON — got: " + raw.slice(0, 200),
+            );
+          }
+
+          if (!tokenRes.ok) {
+            throw new Error("Token error: " + JSON.stringify(tokenData));
+          }
+
+          const params = new URLSearchParams({
+            sample_rate: "16000",
+            speech_model: "universal-streaming-english",
+            format_turns: "true",
+            token: tokenData.token,
+          });
+          ws = new WebSocket(`wss://streaming.assemblyai.com/v3/ws?${params}`);
+
+          ws.onopen = async () => {
+            setStatus("connected", "connected");
+            stopBtn.disabled = false;
+
+            micStream = await navigator.mediaDevices.getUserMedia({
+              audio: true,
+            });
+            audioContext = new (
+              window.AudioContext || window.webkitAudioContext
+            )();
+            const source = audioContext.createMediaStreamSource(micStream);
+
+            scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+            source.connect(scriptNode);
+            scriptNode.connect(audioContext.destination);
+
+            scriptNode.onaudioprocess = (e) => {
+              if (!ws || ws.readyState !== WebSocket.OPEN) return;
+              const input = e.inputBuffer.getChannelData(0);
+              const downsampled = downsampleTo16k(
+                input,
+                audioContext.sampleRate,
+              );
+              const pcm16 = floatTo16BitPCM(downsampled);
+              ws.send(pcm16);
+            };
+          };
+
+          ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.type === "Begin") {
+              log("Session started: " + data.id);
+            } else if (data.type === "Turn") {
+              if (data.end_of_turn) {
+                const p = document.createElement("p");
+                p.textContent = data.transcript;
+                finalLogEl.appendChild(p);
+                partialEl.textContent = "";
+              } else {
+                partialEl.textContent = data.transcript;
+              }
+            } else if (data.type === "Termination") {
+              log(
+                "Session ended. Audio processed: " +
+                  data.audio_duration_seconds +
+                  "s",
+              );
+            } else if (data.error) {
+              log("Error: " + JSON.stringify(data));
+            }
+          };
+
+          ws.onerror = () => {
+            setStatus("error", "error");
+            log("WebSocket error — check the console for details");
+          };
+
+          ws.onclose = (e) => {
+            setStatus("idle");
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            log("WebSocket closed: code=" + e.code + " reason=" + e.reason);
+          };
+        } catch (err) {
+          setStatus("error", "error");
+          log("Start failed: " + err.message);
+          startBtn.disabled = false;
+        }
+      }
+
+      function stop() {
+        if (scriptNode) scriptNode.disconnect();
+        if (audioContext) audioContext.close();
+        if (micStream) micStream.getTracks().forEach((t) => t.stop());
+        if (ws) ws.close();
+        stopBtn.disabled = true;
+      }
+
+      startBtn.addEventListener("click", start);
+      stopBtn.addEventListener("click", stop);
+    </script>
+  </body>
 </html>
