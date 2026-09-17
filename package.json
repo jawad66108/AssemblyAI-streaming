@@ -1,0 +1,9 @@
+{
+  "name": "viva",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "vite": "^8.3.0"
+  }
+}
