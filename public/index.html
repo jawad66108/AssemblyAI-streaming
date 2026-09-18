@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Viva — Day 4: closing the loop</title>
+    <style>
+      body {
+        font-family: -apple-system, system-ui, sans-serif;
+        max-width: 640px;
+        margin: 40px auto;
+        padding: 0 20px;
+        color: #1a1a1a;
+      }
+      h1 {
+        font-size: 1.3rem;
+      }
+      #status {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        background: #eee;
+        margin-left: 8px;
+      }
+      #status.connected {
+        background: #d4f7d4;
+      }
+      #status.error {
+        background: #fbd4d4;
+      }
+      button {
+        font-size: 1rem;
+        padding: 10px 20px;
+        margin: 16px 8px 16px 0;
+        border-radius: 8px;
+        border: 1px solid #ccc;
+        cursor: pointer;
+      }
+      #startBtn {
+        background: #1a1a1a;
+        color: white;
+        border: none;
+      }
+      #startBtn:disabled,
+      #stopBtn:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      #question {
+        font-size: 1.1rem;
+        font-weight: 600;
+        background: #eef4ff;
+        padding: 12px 16px;
+        border-radius: 8px;
+        margin-bottom: 16px;
+      }
+      #partial {
+        color: #999;
+        font-style: italic;
+        min-height: 1.4em;
+        margin-top: 8px;
+      }
+      #history p.answer {
+        margin: 6px 0;
+        padding: 8px 12px;
+        background: #f4f4f4;
+        border-radius: 8px;
+      }
+      #history p.question {
+        margin: 6px 0 0;
+        padding: 8px 12px;
+        background: #eef4ff;
+        border-radius: 8px;
+        font-weight: 600;
+      }
+      #log {
+        font-size: 0.75rem;
+        color: #999;
+        margin-top: 24px;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Viva — Day 4 test<span id="status">idle</span></h1>
+    <p>
+      Answer out loud. When you finish (about 1.2s of silence), the examiner
+      reacts and asks a new question — spoken aloud, adaptively, based on what
+      you actually said.
+    </p>
+
+    <div id="question"></div>
+
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" disabled>Stop</button>
+
+    <div id="partial"></div>
+    <div id="history"></div>
+    <div id="log"></div>
+
+    <script>
+      const STARTING_QUESTION =
+        "Explain, in your own words, the difference between a stack and a queue.";
+
+      const statusEl = document.getElementById("status");
+      const partialEl = document.getElementById("partial");
+      const historyEl = document.getElementById("history");
+      const logEl = document.getElementById("log");
+      const startBtn = document.getElementById("startBtn");
+      const stopBtn = document.getElementById("stopBtn");
+      const questionEl = document.getElementById("question");
+
+      let ws = null;
+      let audioContext = null;
+      let scriptNode = null;
+      let micStream = null;
+
+      let currentQuestion = STARTING_QUESTION;
+      let conversationHistory = [];
+      questionEl.textContent = "Q: " + currentQuestion;
+
+      let answerBuffer = [];
+      let silenceTimer = null;
+      const SILENCE_MS = 1200;
+
+      function onFinalTurn(transcript) {
+        answerBuffer.push(transcript);
+        restartSilenceTimer();
+      }
+
+      function onPartialTurn() {
+        if (silenceTimer) {
+          clearTimeout(silenceTimer);
+          silenceTimer = null;
+        }
+      }
+
+      function restartSilenceTimer() {
+        if (silenceTimer) clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(finalizeAnswer, SILENCE_MS);
+      }
+
+      function speak(text) {
+        window.speechSynthesis.cancel(); // stop anything already queued
+        const utterance = new SpeechSynthesisUtterance(text);
+        window.speechSynthesis.speak(utterance);
+      }
+
+      async function finalizeAnswer() {
+        silenceTimer = null;
+        if (answerBuffer.length === 0) return;
+        const fullAnswer = answerBuffer.join(" ");
+        answerBuffer = [];
+
+        const answerP = document.createElement("p");
+        answerP.className = "answer";
+        answerP.textContent = "You: " + fullAnswer;
+        historyEl.appendChild(answerP);
+        partialEl.textContent = "";
+
+        log("Answer captured. Asking the examiner for the next question…");
+
+        try {
+          const res = await fetch("/api/next-question", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              question: currentQuestion,
+              answer: fullAnswer,
+              history: conversationHistory,
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            log("next-question error: " + JSON.stringify(data));
+            return;
+          }
+
+          conversationHistory.push({
+            question: currentQuestion,
+            answer: fullAnswer,
+          });
+          currentQuestion = data.nextQuestion;
+
+          const questionP = document.createElement("p");
+          questionP.className = "question";
+          questionP.textContent = "Examiner: " + currentQuestion;
+          historyEl.appendChild(questionP);
+          questionEl.textContent = "Q: " + currentQuestion;
+
+          speak(currentQuestion);
+        } catch (err) {
+          log("Failed to get next question: " + err.message);
+        }
+      }
+
+      function log(msg) {
+        logEl.textContent += msg + "\n";
+      }
+
+      function setStatus(text, cls) {
+        statusEl.textContent = text;
+        statusEl.className = cls || "";
+      }
+
+      function downsampleTo16k(float32Buffer, inputSampleRate) {
+        const targetRate = 16000;
+        if (inputSampleRate === targetRate) return float32Buffer;
+        const ratio = inputSampleRate / targetRate;
+        const newLength = Math.round(float32Buffer.length / ratio);
+        const result = new Float32Array(newLength);
+        let offsetResult = 0;
+        let offsetBuffer = 0;
+        while (offsetResult < newLength) {
+          const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+          let accum = 0,
+            count = 0;
+          for (
+            let i = offsetBuffer;
+            i < nextOffsetBuffer && i < float32Buffer.length;
+            i++
+          ) {
+            accum += float32Buffer[i];
+            count++;
+          }
+          result[offsetResult] = count ? accum / count : 0;
+          offsetResult++;
+          offsetBuffer = nextOffsetBuffer;
+        }
+        return result;
+      }
+
+      function floatTo16BitPCM(float32Array) {
+        const buffer = new ArrayBuffer(float32Array.length * 2);
+        const view = new DataView(buffer);
+        for (let i = 0, offset = 0; i < float32Array.length; i++, offset += 2) {
+          const s = Math.max(-1, Math.min(1, float32Array[i]));
+          view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+        }
+        return buffer;
+      }
+
+      async function start() {
+        startBtn.disabled = true;
+        setStatus("connecting…");
+        answerBuffer = [];
+
+        try {
+          const tokenRes = await fetch("/api/token");
+          const raw = await tokenRes.text();
+
+          let tokenData;
+          try {
+            tokenData = JSON.parse(raw);
+          } catch {
+            throw new Error(
+              "Token endpoint didn't return JSON — got: " + raw.slice(0, 200),
+            );
+          }
+
+          if (!tokenRes.ok) {
+            throw new Error("Token error: " + JSON.stringify(tokenData));
+          }
+
+          const params = new URLSearchParams({
+            sample_rate: "16000",
+            speech_model: "universal-streaming-english",
+            format_turns: "true",
+            token: tokenData.token,
+          });
+          ws = new WebSocket(`wss://streaming.assemblyai.com/v3/ws?${params}`);
+
+          ws.onopen = async () => {
+            setStatus("connected", "connected");
+            stopBtn.disabled = false;
+
+            micStream = await navigator.mediaDevices.getUserMedia({
+              audio: true,
+            });
+            audioContext = new (
+              window.AudioContext || window.webkitAudioContext
+            )();
+            const source = audioContext.createMediaStreamSource(micStream);
+
+            scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+            source.connect(scriptNode);
+            scriptNode.connect(audioContext.destination);
+
+            scriptNode.onaudioprocess = (e) => {
+              if (!ws || ws.readyState !== WebSocket.OPEN) return;
+              const input = e.inputBuffer.getChannelData(0);
+              const downsampled = downsampleTo16k(
+                input,
+                audioContext.sampleRate,
+              );
+              const pcm16 = floatTo16BitPCM(downsampled);
+              ws.send(pcm16);
+            };
+          };
+
+          ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.type === "Begin") {
+              log("Session started: " + data.id);
+            } else if (data.type === "Turn") {
+              if (data.end_of_turn) {
+                partialEl.textContent = "";
+                onFinalTurn(data.transcript);
+              } else {
+                partialEl.textContent = data.transcript;
+                onPartialTurn();
+              }
+            } else if (data.type === "Termination") {
+              log(
+                "Session ended. Audio processed: " +
+                  data.audio_duration_seconds +
+                  "s",
+              );
+            } else if (data.error) {
+              log("Error: " + JSON.stringify(data));
+            }
+          };
+
+          ws.onerror = () => {
+            setStatus("error", "error");
+            log("WebSocket error — check the console for details");
+          };
+
+          ws.onclose = (e) => {
+            setStatus("idle");
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            log("WebSocket closed: code=" + e.code + " reason=" + e.reason);
+          };
+        } catch (err) {
+          setStatus("error", "error");
+          log("Start failed: " + err.message);
+          startBtn.disabled = false;
+        }
+      }
+
+      function stop() {
+        if (silenceTimer) clearTimeout(silenceTimer);
+        if (scriptNode) scriptNode.disconnect();
+        if (audioContext) audioContext.close();
+        if (micStream) micStream.getTracks().forEach((t) => t.stop());
+        if (ws) ws.close();
+        stopBtn.disabled = true;
+      }
+
+      startBtn.addEventListener("click", start);
+      stopBtn.addEventListener("click", stop);
+    </script>
+  </body>
+</html>

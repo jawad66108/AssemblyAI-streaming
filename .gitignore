@@ -1,0 +1,7 @@
+ASSEMBLYAI_API_KEY=92ad75dbd1c041d0a427de270c394de2'@ | Set-Content .env
+@'
+.env
+.vercel
+node_modules
+.vercel
+.env*
