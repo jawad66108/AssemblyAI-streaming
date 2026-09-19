@@ -2,8 +2,7 @@
 //
 // Given the current question, the student's spoken answer, and the prior
 // history, asks an LLM to play an oral examiner and return ONE short
-// spoken follow-up. This is the piece that makes Viva an agent rather
-// than a transcriber.
+// spoken follow-up. Uses Groq's free API (OpenAI-compatible format).
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -11,11 +10,10 @@ export default async function handler(req, res) {
     return;
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     res.status(500).json({
-      error:
-        "ANTHROPIC_API_KEY is not set. Run: vercel env add ANTHROPIC_API_KEY",
+      error: "GROQ_API_KEY is not set. Run: vercel env add GROQ_API_KEY",
     });
     return;
   }
@@ -32,6 +30,7 @@ Rules:
 - If their answer is vague, incomplete, or wrong, ask ONE short, pointed follow-up question that presses on the specific weak spot. Do not explain the right answer yourself.
 - If their answer is solid, briefly acknowledge it in one short clause, then ask ONE new short question that moves to a related but different concept.
 - Never ask more than one question at a time.
+- Output EXACTLY ONE sentence, ending in a single question mark. Never output multiple phrasings, alternates, or repeated versions of the same question back to back.
 - Keep it under 25 words — this gets read aloud, not displayed as text.
 - Respond with ONLY the exact words you'd say out loud. No labels, no quotes, no markdown.`;
 
@@ -44,25 +43,28 @@ Rules:
     : currentTurn;
 
   try {
-    const upstream = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
+    const upstream = await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "openai/gpt-oss-20b",
+          max_tokens: 300,
+          reasoning_effort: "low",
+          messages: [
+            { role: "system", content: systemPrompt },
+            {
+              role: "user",
+              content: `Here is the viva so far:\n\n${transcript}\n\nGive your next spoken response now.`,
+            },
+          ],
+        }),
       },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 100,
-        system: systemPrompt,
-        messages: [
-          {
-            role: "user",
-            content: `Here is the viva so far:\n\n${transcript}\n\nGive your next spoken response now.`,
-          },
-        ],
-      }),
-    });
+    );
 
     if (!upstream.ok) {
       const text = await upstream.text();
@@ -71,8 +73,17 @@ Rules:
     }
 
     const data = await upstream.json();
-    const nextQuestion =
-      data.content?.[0]?.text?.trim() || "Can you tell me more about that?";
+    let nextQuestion =
+      data.choices?.[0]?.message?.content?.trim() ||
+      "Can you tell me more about that?";
+
+    // Safety net: even with the prompt above, the model occasionally runs
+    // multiple phrasings together with no separator. Keep only the first
+    // complete sentence so a garbled combo never reaches the student.
+    const firstSentence = nextQuestion.match(/^[^?!.]*[?!.]/);
+    if (firstSentence) {
+      nextQuestion = firstSentence[0].trim();
+    }
     res.status(200).json({ nextQuestion });
   } catch (err) {
     res.status(500).json({ error: String(err) });

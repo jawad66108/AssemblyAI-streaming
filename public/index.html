@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Viva — Day 4: closing the loop</title>
+    <title>Viva — Day 5: verdict card</title>
     <style>
       body {
         font-family: -apple-system, system-ui, sans-serif;
@@ -41,8 +41,13 @@
         color: white;
         border: none;
       }
+      #finishBtn {
+        background: #fff;
+        border: 1px solid #999;
+      }
       #startBtn:disabled,
-      #stopBtn:disabled {
+      #stopBtn:disabled,
+      #finishBtn:disabled {
         opacity: 0.4;
         cursor: default;
       }
@@ -73,6 +78,28 @@
         border-radius: 8px;
         font-weight: 600;
       }
+      #verdictCard {
+        display: none;
+        margin-top: 20px;
+        padding: 16px 20px;
+        background: #fff9e6;
+        border: 1px solid #f0dfa0;
+        border-radius: 10px;
+      }
+      #verdictCard h3 {
+        margin: 14px 0 6px;
+        font-size: 0.95rem;
+      }
+      #verdictCard ul {
+        margin: 4px 0;
+        padding-left: 20px;
+      }
+      #verdictCard li.weak {
+        color: #a33;
+      }
+      #verdictCard li.strong {
+        color: #2a6;
+      }
       #log {
         font-size: 0.75rem;
         color: #999;
@@ -82,38 +109,44 @@
     </style>
   </head>
   <body>
-    <h1>Viva — Day 4 test<span id="status">idle</span></h1>
+    <h1>Viva — Day 5 test<span id="status">idle</span></h1>
     <p>
-      Answer out loud. When you finish (about 1.2s of silence), the examiner
-      reacts and asks a new question — spoken aloud, adaptively, based on what
-      you actually said.
+      Answer out loud. After 5 questions, or whenever you click Finish, you'll
+      get a verdict card summarizing what you handled well and what you couldn't
+      defend.
     </p>
 
     <div id="question"></div>
 
     <button id="startBtn">Start</button>
     <button id="stopBtn" disabled>Stop</button>
+    <button id="finishBtn" disabled>Finish Session</button>
 
     <div id="partial"></div>
     <div id="history"></div>
+    <div id="verdictCard"></div>
     <div id="log"></div>
 
     <script>
       const STARTING_QUESTION =
         "Explain, in your own words, the difference between a stack and a queue.";
+      const MAX_QUESTIONS = 5;
 
       const statusEl = document.getElementById("status");
       const partialEl = document.getElementById("partial");
       const historyEl = document.getElementById("history");
+      const verdictEl = document.getElementById("verdictCard");
       const logEl = document.getElementById("log");
       const startBtn = document.getElementById("startBtn");
       const stopBtn = document.getElementById("stopBtn");
+      const finishBtn = document.getElementById("finishBtn");
       const questionEl = document.getElementById("question");
 
       let ws = null;
       let audioContext = null;
       let scriptNode = null;
       let micStream = null;
+      let sessionEnded = false;
 
       let currentQuestion = STARTING_QUESTION;
       let conversationHistory = [];
@@ -141,14 +174,14 @@
       }
 
       function speak(text) {
-        window.speechSynthesis.cancel(); // stop anything already queued
+        window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
         window.speechSynthesis.speak(utterance);
       }
 
       async function finalizeAnswer() {
         silenceTimer = null;
-        if (answerBuffer.length === 0) return;
+        if (sessionEnded || answerBuffer.length === 0) return;
         const fullAnswer = answerBuffer.join(" ");
         answerBuffer = [];
 
@@ -157,6 +190,22 @@
         answerP.textContent = "You: " + fullAnswer;
         historyEl.appendChild(answerP);
         partialEl.textContent = "";
+
+        const priorHistory = conversationHistory.slice();
+        conversationHistory.push({
+          question: currentQuestion,
+          answer: fullAnswer,
+        });
+
+        if (conversationHistory.length >= MAX_QUESTIONS) {
+          log(
+            "Reached " +
+              MAX_QUESTIONS +
+              " questions — ending session automatically.",
+          );
+          finishSession();
+          return;
+        }
 
         log("Answer captured. Asking the examiner for the next question…");
 
@@ -167,7 +216,7 @@
             body: JSON.stringify({
               question: currentQuestion,
               answer: fullAnswer,
-              history: conversationHistory,
+              history: priorHistory,
             }),
           });
           const data = await res.json();
@@ -176,10 +225,6 @@
             return;
           }
 
-          conversationHistory.push({
-            question: currentQuestion,
-            answer: fullAnswer,
-          });
           currentQuestion = data.nextQuestion;
 
           const questionP = document.createElement("p");
@@ -191,6 +236,78 @@
           speak(currentQuestion);
         } catch (err) {
           log("Failed to get next question: " + err.message);
+        }
+      }
+
+      async function finishSession() {
+        if (sessionEnded) return;
+        sessionEnded = true;
+        stop();
+        finishBtn.disabled = true;
+        questionEl.textContent = "Generating your verdict…";
+
+        if (conversationHistory.length === 0) {
+          questionEl.textContent =
+            "No answers captured yet — nothing to verdict on.";
+          return;
+        }
+
+        try {
+          const res = await fetch("/api/verdict", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ history: conversationHistory }),
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            log("verdict error: " + JSON.stringify(data));
+            questionEl.textContent =
+              "Session complete (verdict failed — see log).";
+            return;
+          }
+          renderVerdict(data);
+          questionEl.textContent = "Session complete.";
+        } catch (err) {
+          log("Failed to get verdict: " + err.message);
+          questionEl.textContent =
+            "Session complete (verdict failed — see log).";
+        }
+      }
+
+      function renderVerdict(data) {
+        verdictEl.style.display = "block";
+        verdictEl.innerHTML = "";
+
+        const summary = document.createElement("p");
+        summary.textContent = data.overallSummary || "";
+        verdictEl.appendChild(summary);
+
+        if (data.strong && data.strong.length) {
+          const h = document.createElement("h3");
+          h.textContent = "Handled well";
+          verdictEl.appendChild(h);
+          const ul = document.createElement("ul");
+          data.strong.forEach((item) => {
+            const li = document.createElement("li");
+            li.className = "strong";
+            li.textContent = item;
+            ul.appendChild(li);
+          });
+          verdictEl.appendChild(ul);
+        }
+
+        if (data.weak && data.weak.length) {
+          const h2 = document.createElement("h3");
+          h2.textContent = "Couldn't defend under questioning";
+          verdictEl.appendChild(h2);
+          const ul2 = document.createElement("ul");
+          data.weak.forEach((item) => {
+            const li = document.createElement("li");
+            li.className = "weak";
+            li.textContent = item;
+            ul2.appendChild(li);
+          });
+          verdictEl.appendChild(ul2);
         }
       }
 
@@ -244,6 +361,7 @@
         startBtn.disabled = true;
         setStatus("connecting…");
         answerBuffer = [];
+        sessionEnded = false;
 
         try {
           const tokenRes = await fetch("/api/token");
@@ -273,6 +391,7 @@
           ws.onopen = async () => {
             setStatus("connected", "connected");
             stopBtn.disabled = false;
+            finishBtn.disabled = false;
 
             micStream = await navigator.mediaDevices.getUserMedia({
               audio: true,
@@ -330,6 +449,7 @@
             setStatus("idle");
             startBtn.disabled = false;
             stopBtn.disabled = true;
+            finishBtn.disabled = true;
             log("WebSocket closed: code=" + e.code + " reason=" + e.reason);
           };
         } catch (err) {
@@ -350,6 +470,7 @@
 
       startBtn.addEventListener("click", start);
       stopBtn.addEventListener("click", stop);
+      finishBtn.addEventListener("click", finishSession);
     </script>
   </body>
 </html>
