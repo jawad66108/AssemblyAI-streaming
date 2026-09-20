@@ -2,137 +2,244 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Viva — Day 5: verdict card</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Viva — oral exam practice</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,500&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <style>
+      :root {
+        --ink: #14213d;
+        --ink-deep: #0e1729;
+        --parchment: #f2eee3;
+        --brass: #c9a660;
+        --brass-dim: #7d6a3f;
+        --forest: #5b8a6d;
+        --oxblood: #b05c5c;
+        --text: #ece7d8;
+        --text-muted: #8a93b0;
+        --mono: "IBM Plex Mono", ui-monospace, monospace;
+        --serif: "Source Serif 4", Georgia, serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
-        font-family: -apple-system, system-ui, sans-serif;
-        max-width: 640px;
-        margin: 40px auto;
-        padding: 0 20px;
-        color: #1a1a1a;
+        background: var(--ink);
+        color: var(--text);
+        font-family: var(--mono);
+        margin: 0;
+        padding: 48px 20px 80px;
+        -webkit-font-smoothing: antialiased;
       }
-      h1 {
-        font-size: 1.3rem;
+
+      .stage {
+        max-width: 620px;
+        margin: 0 auto;
       }
-      #status {
-        display: inline-block;
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 0.8rem;
-        background: #eee;
-        margin-left: 8px;
+
+      .mark {
+        font-family: var(--serif);
+        font-size: 1.05rem;
+        letter-spacing: 0.02em;
+        color: var(--brass);
+        margin-bottom: 28px;
       }
-      #status.connected {
-        background: #d4f7d4;
+
+      .waveform-panel {
+        background: var(--ink-deep);
+        border-top: 2px solid var(--brass);
+        padding: 18px 20px 14px;
       }
-      #status.error {
-        background: #fbd4d4;
+
+      canvas#waveCanvas {
+        display: block;
+        width: 100%;
+        height: 90px;
       }
+
+      .status-line {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        margin-top: 6px;
+        display: flex;
+        justify-content: space-between;
+      }
+
+      .progress {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        margin-top: 18px;
+      }
+
+      .question {
+        font-family: var(--serif);
+        font-size: 1.45rem;
+        line-height: 1.45;
+        padding-left: 20px;
+        border-left: 3px solid var(--brass);
+        margin: 14px 0 26px;
+      }
+
+      .controls {
+        margin-bottom: 6px;
+      }
+
       button {
-        font-size: 1rem;
-        padding: 10px 20px;
-        margin: 16px 8px 16px 0;
-        border-radius: 8px;
-        border: 1px solid #ccc;
+        font-family: var(--mono);
+        font-size: 0.85rem;
+        padding: 10px 18px;
+        margin: 0 10px 10px 0;
+        border-radius: 3px;
+        border: 1px solid var(--brass-dim);
+        background: transparent;
+        color: var(--text);
         cursor: pointer;
+        transition: background 0.15s ease;
+      }
+      button:hover:not(:disabled) {
+        background: rgba(201, 166, 96, 0.12);
       }
       #startBtn {
-        background: #1a1a1a;
-        color: white;
-        border: none;
+        background: var(--brass);
+        color: var(--ink-deep);
+        border-color: var(--brass);
+        font-weight: 500;
       }
-      #finishBtn {
-        background: #fff;
-        border: 1px solid #999;
+      #startBtn:hover:not(:disabled) {
+        background: #d8b878;
       }
-      #startBtn:disabled,
-      #stopBtn:disabled,
-      #finishBtn:disabled {
-        opacity: 0.4;
+      button:disabled {
+        opacity: 0.35;
         cursor: default;
       }
-      #question {
-        font-size: 1.1rem;
-        font-weight: 600;
-        background: #eef4ff;
-        padding: 12px 16px;
-        border-radius: 8px;
-        margin-bottom: 16px;
-      }
-      #partial {
-        color: #999;
+
+      .live-caption {
+        font-size: 0.9rem;
+        color: var(--text-muted);
         font-style: italic;
         min-height: 1.4em;
+        margin: 12px 0 4px;
+      }
+
+      .transcript {
         margin-top: 8px;
       }
-      #history p.answer {
-        margin: 6px 0;
-        padding: 8px 12px;
-        background: #f4f4f4;
-        border-radius: 8px;
+      .transcript .turn {
+        margin: 14px 0;
       }
-      #history p.question {
-        margin: 6px 0 0;
-        padding: 8px 12px;
-        background: #eef4ff;
-        border-radius: 8px;
-        font-weight: 600;
+      .transcript .you {
+        font-family: var(--mono);
+        font-size: 0.9rem;
+        color: var(--text-muted);
       }
-      #verdictCard {
+      .transcript .you::before {
+        content: "you  ";
+        color: var(--brass-dim);
+      }
+      .transcript .examiner {
+        font-family: var(--serif);
+        font-style: italic;
+        font-size: 1.05rem;
+        border-left: 2px solid var(--brass-dim);
+        padding-left: 14px;
+        color: var(--text);
+      }
+
+      .verdict {
         display: none;
-        margin-top: 20px;
-        padding: 16px 20px;
-        background: #fff9e6;
-        border: 1px solid #f0dfa0;
-        border-radius: 10px;
+        background: var(--parchment);
+        color: var(--ink-deep);
+        padding: 26px 28px 20px;
+        margin-top: 36px;
+        border-top: 3px solid var(--brass);
       }
-      #verdictCard h3 {
-        margin: 14px 0 6px;
+      .verdict p.summary {
+        font-family: var(--serif);
+        font-size: 1.1rem;
+        line-height: 1.5;
+        margin: 0 0 6px;
+      }
+      .verdict h3 {
+        font-family: var(--serif);
+        font-weight: 600;
         font-size: 0.95rem;
+        margin: 18px 0 6px;
       }
-      #verdictCard ul {
+      .verdict ul {
         margin: 4px 0;
         padding-left: 20px;
       }
-      #verdictCard li.weak {
-        color: #a33;
+      .verdict li {
+        margin: 3px 0;
       }
-      #verdictCard li.strong {
-        color: #2a6;
+      .verdict li.strong {
+        color: var(--forest);
       }
-      #log {
-        font-size: 0.75rem;
-        color: #999;
-        margin-top: 24px;
+      .verdict li.weak {
+        color: var(--oxblood);
+      }
+
+      details.devlog {
+        margin-top: 40px;
+      }
+      details.devlog summary {
+        font-size: 0.7rem;
+        color: var(--text-muted);
+        cursor: pointer;
+      }
+      details.devlog pre {
+        font-size: 0.7rem;
+        color: var(--text-muted);
         white-space: pre-wrap;
+        margin-top: 8px;
       }
     </style>
   </head>
   <body>
-    <h1>Viva — Day 5 test<span id="status">idle</span></h1>
-    <p>
-      Answer out loud. After 5 questions, or whenever you click Finish, you'll
-      get a verdict card summarizing what you handled well and what you couldn't
-      defend.
-    </p>
+    <div class="stage">
+      <div class="mark">Viva</div>
 
-    <div id="question"></div>
+      <div class="waveform-panel">
+        <canvas id="waveCanvas" width="600" height="90"></canvas>
+        <div class="status-line">
+          <span id="statusText">idle</span>
+          <span id="progress">Question 1 of 5</span>
+        </div>
+      </div>
 
-    <button id="startBtn">Start</button>
-    <button id="stopBtn" disabled>Stop</button>
-    <button id="finishBtn" disabled>Finish Session</button>
+      <div class="question" id="question"></div>
 
-    <div id="partial"></div>
-    <div id="history"></div>
-    <div id="verdictCard"></div>
-    <div id="log"></div>
+      <div class="controls">
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" disabled>Stop</button>
+        <button id="finishBtn" disabled>Finish session</button>
+      </div>
+
+      <div class="live-caption" id="partial"></div>
+
+      <div class="transcript" id="history"></div>
+
+      <div class="verdict" id="verdictCard"></div>
+
+      <details class="devlog">
+        <summary>Session log</summary>
+        <pre id="log"></pre>
+      </details>
+    </div>
 
     <script>
       const STARTING_QUESTION =
         "Explain, in your own words, the difference between a stack and a queue.";
       const MAX_QUESTIONS = 5;
 
-      const statusEl = document.getElementById("status");
+      const statusTextEl = document.getElementById("statusText");
+      const progressEl = document.getElementById("progress");
       const partialEl = document.getElementById("partial");
       const historyEl = document.getElementById("history");
       const verdictEl = document.getElementById("verdictCard");
@@ -141,20 +248,30 @@
       const stopBtn = document.getElementById("stopBtn");
       const finishBtn = document.getElementById("finishBtn");
       const questionEl = document.getElementById("question");
+      const canvas = document.getElementById("waveCanvas");
+      const canvasCtx = canvas.getContext("2d");
 
       let ws = null;
       let audioContext = null;
       let scriptNode = null;
       let micStream = null;
       let sessionEnded = false;
+      let analyser = null;
+      let waveRAF = null;
 
       let currentQuestion = STARTING_QUESTION;
       let conversationHistory = [];
       questionEl.textContent = "Q: " + currentQuestion;
+      updateProgress();
 
       let answerBuffer = [];
       let silenceTimer = null;
       const SILENCE_MS = 1200;
+
+      function updateProgress() {
+        const num = Math.min(conversationHistory.length + 1, MAX_QUESTIONS);
+        progressEl.textContent = "Question " + num + " of " + MAX_QUESTIONS;
+      }
 
       function onFinalTurn(transcript) {
         answerBuffer.push(transcript);
@@ -186,8 +303,8 @@
         answerBuffer = [];
 
         const answerP = document.createElement("p");
-        answerP.className = "answer";
-        answerP.textContent = "You: " + fullAnswer;
+        answerP.className = "turn you";
+        answerP.textContent = fullAnswer;
         historyEl.appendChild(answerP);
         partialEl.textContent = "";
 
@@ -196,6 +313,7 @@
           question: currentQuestion,
           answer: fullAnswer,
         });
+        updateProgress();
 
         if (conversationHistory.length >= MAX_QUESTIONS) {
           log(
@@ -228,8 +346,8 @@
           currentQuestion = data.nextQuestion;
 
           const questionP = document.createElement("p");
-          questionP.className = "question";
-          questionP.textContent = "Examiner: " + currentQuestion;
+          questionP.className = "turn examiner";
+          questionP.textContent = currentQuestion;
           historyEl.appendChild(questionP);
           questionEl.textContent = "Q: " + currentQuestion;
 
@@ -279,6 +397,7 @@
         verdictEl.innerHTML = "";
 
         const summary = document.createElement("p");
+        summary.className = "summary";
         summary.textContent = data.overallSummary || "";
         verdictEl.appendChild(summary);
 
@@ -315,10 +434,58 @@
         logEl.textContent += msg + "\n";
       }
 
-      function setStatus(text, cls) {
-        statusEl.textContent = text;
-        statusEl.className = cls || "";
+      function setStatus(text) {
+        statusTextEl.textContent = text;
       }
+
+      // --- waveform ---
+      function drawIdleLine() {
+        const w = canvas.width,
+          h = canvas.height;
+        canvasCtx.clearRect(0, 0, w, h);
+        canvasCtx.strokeStyle = "#3a4468";
+        canvasCtx.lineWidth = 1;
+        canvasCtx.beginPath();
+        canvasCtx.moveTo(0, h / 2);
+        canvasCtx.lineTo(w, h / 2);
+        canvasCtx.stroke();
+      }
+
+      function drawWave() {
+        if (!analyser) return;
+        const bufferLength = analyser.frequencyBinCount;
+        const data = new Uint8Array(bufferLength);
+        analyser.getByteFrequencyData(data);
+
+        const w = canvas.width,
+          h = canvas.height;
+        canvasCtx.clearRect(0, 0, w, h);
+        canvasCtx.fillStyle = "#C9A660";
+
+        const barCount = 48;
+        const step = Math.floor(bufferLength / barCount);
+        const barWidth = w / barCount;
+
+        for (let i = 0; i < barCount; i++) {
+          const value = data[i * step] || 0;
+          const barHeight = (value / 255) * h;
+          canvasCtx.fillRect(
+            i * barWidth,
+            h - barHeight,
+            barWidth - 2,
+            barHeight,
+          );
+        }
+
+        waveRAF = requestAnimationFrame(drawWave);
+      }
+
+      function stopWave() {
+        if (waveRAF) cancelAnimationFrame(waveRAF);
+        waveRAF = null;
+        drawIdleLine();
+      }
+      // --- end waveform ---
 
       function downsampleTo16k(float32Buffer, inputSampleRate) {
         const targetRate = 16000;
@@ -389,7 +556,7 @@
           ws = new WebSocket(`wss://streaming.assemblyai.com/v3/ws?${params}`);
 
           ws.onopen = async () => {
-            setStatus("connected", "connected");
+            setStatus("connected");
             stopBtn.disabled = false;
             finishBtn.disabled = false;
 
@@ -400,6 +567,11 @@
               window.AudioContext || window.webkitAudioContext
             )();
             const source = audioContext.createMediaStreamSource(micStream);
+
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            source.connect(analyser);
+            drawWave();
 
             scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
             source.connect(scriptNode);
@@ -441,7 +613,7 @@
           };
 
           ws.onerror = () => {
-            setStatus("error", "error");
+            setStatus("error");
             log("WebSocket error — check the console for details");
           };
 
@@ -450,10 +622,11 @@
             startBtn.disabled = false;
             stopBtn.disabled = true;
             finishBtn.disabled = true;
+            stopWave();
             log("WebSocket closed: code=" + e.code + " reason=" + e.reason);
           };
         } catch (err) {
-          setStatus("error", "error");
+          setStatus("error");
           log("Start failed: " + err.message);
           startBtn.disabled = false;
         }
@@ -462,12 +635,15 @@
       function stop() {
         if (silenceTimer) clearTimeout(silenceTimer);
         if (scriptNode) scriptNode.disconnect();
+        if (analyser) analyser.disconnect();
         if (audioContext) audioContext.close();
         if (micStream) micStream.getTracks().forEach((t) => t.stop());
         if (ws) ws.close();
         stopBtn.disabled = true;
+        stopWave();
       }
 
+      drawIdleLine();
       startBtn.addEventListener("click", start);
       stopBtn.addEventListener("click", stop);
       finishBtn.addEventListener("click", finishSession);
